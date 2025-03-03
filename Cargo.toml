@@ -1,0 +1,11 @@
+[package]
+name = "hazard"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+check-loom= ["loom"]
+
+[dependencies]
+cfg-if = "1.0.0"
+loom = { version = "0.7.2", optional = true }
