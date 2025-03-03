@@ -37,7 +37,7 @@ impl Shield {
     /// For a pointer `p`, if "`src` still pointing to `pointer`" implies that `p` is not retired,
     /// then `Ok(())` means that shields set to `p` are validated.
     pub fn validate<T>(pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
-        let current = src.load(Ordering::SeqCst);
+        let current = src.load(Ordering::Relaxed);
         // double check the pointer make sure beween the reader `load the pointer and store in the
         // hazard slot` happed before the `writer retire the pointer and scan the retired
         // list`
@@ -82,7 +82,7 @@ impl Drop for Shield {
     fn drop(&mut self) {
         let slot = unsafe { self.slot.as_ref() };
         slot.hazard.store(ptr::null_mut(), Ordering::Relaxed);
-        slot.active.store(false, Ordering::SeqCst);
+        slot.active.store(false, Ordering::Release);
     }
 }
 
@@ -144,7 +144,6 @@ impl HazardBag {
     /// Acquires a slot in the hazard set, either by recycling an inactive slot or allocating a new
     /// slot.
     fn acquire_slot(&self) -> &HazardSlot {
-        let mut slot_ptr = self.head.load(Ordering::SeqCst);
         if let Some(slot) = self.try_acquire_inactive() {
             return slot;
         }
@@ -155,11 +154,11 @@ impl HazardBag {
         // Link the new slot to the head of the list.
         let slot_ptr = Box::into_raw(slot);
         loop {
-            let head = self.head.load(Ordering::SeqCst);
+            let head = self.head.load(Ordering::Relaxed);
             unsafe { slot_ptr.as_mut().unwrap().next = head };
             if self
                 .head
-                .compare_exchange_weak(head, slot_ptr, Ordering::SeqCst, Ordering::SeqCst)
+                .compare_exchange_weak(head, slot_ptr, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
                 return unsafe { &*slot_ptr };
@@ -169,13 +168,13 @@ impl HazardBag {
 
     /// Find an inactive slot and activate it.
     fn try_acquire_inactive(&self) -> Option<&HazardSlot> {
-        let mut slot_ptr = self.head.load(Ordering::SeqCst);
+        let mut slot_ptr = self.head.load(Ordering::Relaxed);
         while !slot_ptr.is_null() {
             let slot = unsafe { &*slot_ptr };
             if !slot.active.load(Ordering::Relaxed)
                 && slot
                     .active
-                    .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
             {
                 return Some(slot);
@@ -188,7 +187,7 @@ impl HazardBag {
     /// Returns all the hazards in the set.
     pub fn all_hazards(&self) -> HashSet<*mut ()> {
         let mut hazards = HashSet::new();
-        let mut slot_ptr = self.head.load(Ordering::SeqCst);
+        let mut slot_ptr = self.head.load(Ordering::Relaxed);
         while !slot_ptr.is_null() {
             let slot = unsafe { &*slot_ptr };
             let hazard = slot.hazard.load(Ordering::Relaxed);
